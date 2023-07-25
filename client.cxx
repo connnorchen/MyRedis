@@ -12,6 +12,46 @@
 #include "file_ops.h"
 #include "util.h"
 
+static int32_t buffer_req(char buf[], const char *text) {
+    size_t len = strlen(text);
+    if (len > K_MAX_LENGTH) {
+        msg("length is too long", errno);
+        return -1;
+    }
+    memcpy(buf, &len, sizeof(int));
+    memcpy(buf + sizeof(int), text, len);
+    return 4 + len;
+}
+
+static int32_t send_req(int connfd, char buf[], int buf_size) {
+    int rv = write_all(connfd, buf, buf_size);
+    if (rv) {
+        printf("rv %d\n", rv);
+        return -1;
+    }
+    return 0;
+}
+
+static int32_t read_res(int connfd, char buf[]) {
+    int rv = read_full(connfd, buf, 4);
+    if (rv) {
+        return -1;
+    }
+    int len = 0;
+    memcpy(&len, buf, sizeof(int));
+    if (len > K_MAX_LENGTH) {
+        return -1;
+    }
+    printf("length of msg: %d\n", len);
+    
+    rv = read_full(connfd, buf + sizeof(int), len);
+    if (rv) {
+        return -1;
+    }
+    printf("server says: %.*s\n", len, buf + sizeof(int));
+    return 0;
+}
+
 static int32_t query(int connfd, const char *text) {
     size_t len = strlen(text);
     if (len > K_MAX_LENGTH) {
@@ -64,20 +104,22 @@ int main() {
     if (rv) {
         die("connect", errno);
     }
-    // multiple requests
-    int32_t err = query(fd, "hello1");
-    if (err) {
-        goto L_DONE;
+    char buf[K_MAX_LENGTH + 4];
+    int32_t len = 0;
+    int32_t err = 0;
+    for (int i = 0; i < 3; i++) {
+        len += buffer_req(&buf[len], "hello1");
+        printf("sended %d bytes\n", len);
     }
-    err = query(fd, "hello2");
-    if (err) {
-        goto L_DONE;
+    send_req(fd, buf, len);
+    printf("sended req\n");
+    for (int i = 0; i < 3; i++) {
+        err = read_res(fd, buf);
+        if (err) {
+            goto L_DONE;
+        }
     }
-    err = query(fd, "hello3");
-    if (err) {
-        goto L_DONE;
-    }
-
+    
 L_DONE:
     close(fd);
     return 0;
