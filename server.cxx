@@ -27,6 +27,7 @@ typedef struct Conn {
     // buffer for reading
     size_t rbuf_size = 0;
     uint8_t rbuf[4 + K_MAX_LENGTH];
+    size_t rbuf_offset = 0;
     // buffer for writing;
     size_t wbuf_size = 0;
     size_t wbuf_sent = 0;
@@ -72,7 +73,7 @@ bool try_one_request(Conn* conn) {
     }
 
     int len = 0;
-    memcpy(&len, conn->rbuf, 4);
+    memcpy(&len, &conn->rbuf[conn->rbuf_offset], 4);
     if (len > K_MAX_LENGTH) {
         msg("message length is too long", 0);
         return false;
@@ -83,25 +84,20 @@ bool try_one_request(Conn* conn) {
         return false;
     }
     // got one request, process it.
-    printf("client says: %.*s\n", len, &conn->rbuf[4]);
+    printf("client says: %.*s\n", len, &conn->rbuf[4 + conn->rbuf_offset]);
 
     // generating response.
-    memcpy(conn->wbuf, &len, 4);
-    memcpy(&conn->wbuf[4], &conn->rbuf[4], len);
-    conn->wbuf_size = len + 4;
+    memcpy(&conn->wbuf[conn->wbuf_size], &len, 4);
+    memcpy(&conn->wbuf[4 + conn->wbuf_size], &conn->rbuf[4 + conn->rbuf_offset], len);
+    conn->wbuf_size += len + 4;
+    printf("this is the wbuf_size as it grows: %d\n", (int) conn->wbuf_size);
     
     // remove the request from rbuf.
     // note: frequent memmove is inefficient, need better handling in prod.
     size_t remain = conn->rbuf_size - len - 4;
-    if (remain) {
-        memmove(conn->rbuf, &conn->rbuf[len + 4], remain);
-    }
+    conn->rbuf_offset += len + 4;
     conn->rbuf_size = remain;
 
-    // change state
-    conn->state = STATE_RES;
-    state_res(conn);
-    
     // continue the outer loop if the request was fully processed
     return (conn->state == STATE_REQ);
 }
@@ -145,6 +141,11 @@ bool try_fill_buffer(Conn* conn) {
     assert (conn->rbuf_size < sizeof(conn->rbuf));
     
     ssize_t rv = 0;
+    if (conn->rbuf_offset) {
+        assert (conn->rbuf_offset <= sizeof(conn->rbuf));
+        memmove(conn->rbuf, &conn->rbuf[conn->rbuf_offset], conn->rbuf_size);
+        conn->rbuf_offset = 0;
+    }
     do {
         size_t cap = sizeof(conn->rbuf) - conn->rbuf_size;
         rv = read(conn->fd, &conn->rbuf[conn->rbuf_size], cap);
@@ -175,6 +176,10 @@ bool try_fill_buffer(Conn* conn) {
     // Try to process request one at a time.
     while (try_one_request(conn)) {}
     
+    // change state
+    conn->state = STATE_RES;
+    state_res(conn);
+
     return (conn->state == STATE_REQ);
 }
 
