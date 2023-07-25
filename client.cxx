@@ -119,6 +119,9 @@ int main() {
             goto L_DONE;
         }
     }
+
+    // mimik a client hanging and ready to make another request
+    while (true) {}
     
 L_DONE:
     close(fd);

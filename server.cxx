@@ -280,7 +280,6 @@ int main() {
         // for convenience, the listening fd is put in the first position.
         struct pollfd pfd = {fd, POLLIN, 0};
         poll_args.push_back(pfd);
-        printf("pushed listening fd\n");
         // connection fds
         for (Conn *conn : fd2conn) {
             if (!conn) {
@@ -292,7 +291,6 @@ int main() {
             pfd.events |= POLLERR;
             poll_args.push_back(pfd);
             pfd.revents = 0;
-            printf("pushed new pfd\n");
         }
         
         // poll for the active fds.
@@ -310,6 +308,7 @@ int main() {
                 Conn *conn = fd2conn[poll_arg.fd]; 
                 connection_io(conn);
                 if (conn->state == STATE_END) {
+                    printf("conn fd %d state reach to the end, freeing the memory\n", poll_arg.fd);
                     fd2conn[conn->fd] = NULL;
                     (void) close(conn->fd);
                     free(conn);
