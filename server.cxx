@@ -11,7 +11,6 @@
 #include <string.h>
 #include <arpa/inet.h>
 #include <vector>
-#include <fcntl.h>
 #include <poll.h>
 #include "file_ops.h"
 #include "util.h"
@@ -34,22 +33,6 @@ typedef struct Conn {
     uint8_t wbuf[4 + K_MAX_LENGTH]; 
 } Conn;
 
-
-void fd_set_nb(int fd) {
-    errno = 0;
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (errno) {
-        die("file flags setting failed", errno);
-        return;
-    }
-
-    flags |= O_NONBLOCK;
-    (void)fcntl(fd, F_SETFL, flags);
-    if (errno) {
-        die("fcntl error", errno);
-    }
-}
-
 bool try_flush_buffer(Conn* conn) {
     ssize_t rv = 0;
     do {
@@ -68,7 +51,6 @@ bool try_flush_buffer(Conn* conn) {
     conn->wbuf_sent += (size_t) rv;
     assert (conn->wbuf_sent <= conn->wbuf_size);
     if (conn->wbuf_sent == conn->wbuf_size) {
-        printf("sended everything\n");
         conn->wbuf_size = 0;
         conn->wbuf_sent = 0;
         conn->state = STATE_REQ;
@@ -122,37 +104,6 @@ bool try_one_request(Conn* conn) {
     
     // continue the outer loop if the request was fully processed
     return (conn->state == STATE_REQ);
-}
-
-static int32_t one_request(int connfd) {
-    char req_buf[sizeof(int) + K_MAX_LENGTH + 1]; 
-    int len = read_length_from_socket(connfd, req_buf);
-    if (len < 0) {
-        msg("read length error", errno);
-        return -1;
-    }
-    if (len > K_MAX_LENGTH) {
-        msg("request length is too large", errno);
-        return -1;
-    }
-    
-    int32_t rv = read_content_from_socket(connfd, &req_buf[4], len);
-    if (rv) {
-        msg("read content error", errno);
-        return -1;
-    }
-    req_buf[sizeof(int) + len] = '\0';
-    printf("client says: %s\n", &req_buf[4]);
-    
-    char response_buf[4 + K_MAX_LENGTH] = {};
-    memcpy(response_buf, &len, 4); // copy over length
-    memcpy(&response_buf[4], &req_buf[4], len); //copy over request msg.
-    int err = write_all(connfd, response_buf, len + 4);
-    if (err) {
-        msg("unable to write all from reply buf", errno);
-        return -1;
-    }
-    return 0;
 }
 
 void conn_put(std::vector<Conn * > &fd2conn, Conn* new_conn) {
