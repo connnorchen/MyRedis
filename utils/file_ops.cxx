@@ -3,7 +3,23 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 #include "util.h"
+
+void fd_set_nb(int fd) {
+    errno = 0;
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (errno) {
+        die("file flags setting failed", errno);
+        return;
+    }
+
+    flags |= O_NONBLOCK;
+    (void)fcntl(fd, F_SETFL, flags);
+    if (errno) {
+        die("fcntl error", errno);
+    }
+}
 
 // this function reads until it gets exactly n bytes;
 int32_t read_full(int conn, char* buf, size_t n) {
