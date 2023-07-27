@@ -1,3 +1,4 @@
+#include <_types/_uint32_t.h>
 #include <cstring>
 #include <netinet/in.h>
 #include <string.h>
@@ -9,6 +10,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <netinet/ip.h>
+#include <vector>
 #include "file_ops.h"
 #include "util.h"
 
@@ -23,36 +25,56 @@ static int32_t buffer_req(char buf[], const char *text) {
     return 4 + len;
 }
 
-static int32_t send_req(int connfd, char buf[], int buf_size) {
-    int rv = write_all(connfd, buf, buf_size);
-    if (rv) {
-        printf("rv %d\n", rv);
-        return -1;
-    }
-    return 0;
-}
+static int32_t send_req(int connfd, std::vector<std::string> &cmd) {
+    uint32_t len = 4;
 
-static int32_t read_res(int connfd, char buf[]) {
-    int rv = read_full(connfd, buf, 4);
-    if (rv) {
-        return -1;
+    for (const std::string &s : cmd) {
+        len += 4 + ((uint32_t) s.size());
     }
-    int len = 0;
-    memcpy(&len, buf, sizeof(int));
     if (len > K_MAX_LENGTH) {
+        msg("req length is too long", -1);
         return -1;
     }
-    printf("length of msg: %d\n", len);
+
+    char send_buf[4 + K_MAX_LENGTH];
+    uint32_t sz = (uint32_t) cmd.size();
+    memcpy(send_buf, &len, 4);
+    memcpy(&send_buf[4], &sz, 4);
     
-    rv = read_full(connfd, buf + sizeof(int), len);
+    size_t pos = 8;
+    for (const std::string &s: cmd) {
+        uint32_t str_len = (uint32_t) s.size();
+        memcpy(&send_buf[pos], &str_len, 4);
+        memcpy(&send_buf[pos + 4], s.data(), s.size());
+        pos += 4 + s.size(); 
+    }
+    return write_all(connfd, send_buf, len + 4);
+}
+
+static int32_t read_res(int connfd) {
+    char rbuf[4 + K_MAX_LENGTH];
+    uint32_t sz = 0;
+    int rv = read_full(connfd, &rbuf[0], 4);
     if (rv) {
+        msg("unable to read msg size", -1);
         return -1;
     }
-    printf("server says: %.*s\n", len, buf + sizeof(int));
+    memcpy(&sz, &rbuf[0], 4);
+    printf("msg size is %d\n", sz);
+    if (sz > K_MAX_LENGTH) {
+        msg("msg size too large", -1);
+        return -1;
+    }
+
+    rv = read_full(connfd, &rbuf[4], (size_t) sz);
+    uint32_t rescode = 0;
+    memcpy(&rescode, &rbuf[4], 4);
+    printf("server says: [%u] %.*s\n", rescode, sz - 4, &rbuf[4 + 4]);
+
     return 0;
 }
 
-int main() {
+int main(int argc, char** argv) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         die("socket()", errno);
@@ -66,20 +88,19 @@ int main() {
     if (rv) {
         die("connect", errno);
     }
-    char buf[K_MAX_LENGTH + 4];
-    int32_t len = 0;
-    int32_t err = 0;
-    for (int i = 0; i < 3; i++) {
-        len += buffer_req(&buf[len], "hello1");
-        printf("sended %d bytes\n", len);
+
+    std::vector<std::string> cmd;
+    for (int i = 1; i < argc; i++) {
+        cmd.push_back(argv[i]);
     }
-    send_req(fd, buf, len);
-    printf("sended req\n");
-    for (int i = 0; i < 3; i++) {
-        err = read_res(fd, buf);
-        if (err) {
-            goto L_DONE;
-        }
+    int32_t err = send_req(fd, cmd);
+    if (err) {
+        goto L_DONE;
+    }
+
+    err = read_res(fd);
+    if (err) {
+        goto L_DONE;
     }
 
     // mimik a client hanging and ready to make another request

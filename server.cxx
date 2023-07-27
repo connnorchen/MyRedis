@@ -1,4 +1,5 @@
 #include <cstring>
+#include <string>
 #include <sys/_types/_fd_def.h>
 #include <sys/errno.h>
 #include <sys/fcntl.h>
@@ -14,6 +15,7 @@
 #include <poll.h>
 #include "file_ops.h"
 #include "util.h"
+#include "ops.h"
 
 enum {
     STATE_REQ = 0,
@@ -52,6 +54,7 @@ bool try_flush_buffer(Conn* conn) {
     conn->wbuf_sent += (size_t) rv;
     assert (conn->wbuf_sent <= conn->wbuf_size);
     if (conn->wbuf_sent == conn->wbuf_size) {
+        printf("sended %lu bytes\n", conn->wbuf_sent);
         conn->wbuf_size = 0;
         conn->wbuf_sent = 0;
         conn->state = STATE_REQ;
@@ -65,6 +68,69 @@ void state_res(Conn* conn) {
     while (try_flush_buffer(conn)) {}
 }
 
+int32_t parse_req(
+    const uint8_t* req_buf, int32_t len,
+    std::vector<std::string>& cmd
+) {
+    if (len < 4) {
+        msg("not enough data in req_buf", 0);
+        return -1;
+    }
+    // number of strings
+    uint32_t n = 0;
+    memcpy(&n, req_buf, 4);
+    if (n > K_MAX_LENGTH) {
+        msg("too many strs", 0);
+        return -1;
+    }
+
+    size_t pos = 4;
+    while (n--) {
+        if (pos + 4 > len) {
+            msg("not enough data: |nstr|len (partial)|", 0);
+            return -1;
+        }
+        uint32_t str_len = 0;
+        memcpy(&str_len, &req_buf[pos], 4); 
+        if (pos + str_len + 4 > len) {
+            msg("not enough data: |nstr|len|data (partial)", 0);
+            return -1;
+        }
+        cmd.push_back(std::string((char *)&req_buf[pos + 4], str_len));
+        pos += 4 + str_len;
+    }
+    if (pos != len) {
+
+    }
+    return 0;
+}
+
+int32_t do_request(const uint8_t *req_buf, 
+        int32_t len, uint32_t *rescode, 
+        uint8_t *res_buf, uint32_t *res_len) {
+    std::vector<std::string> cmd;
+    if (0 != parse_req(req_buf, len, cmd)) {
+        msg("bad request", -1);
+        return -1;
+    }
+    if (cmd.size() == 2 && cmd_is(cmd[0], "get")) {
+        printf("get request\n");
+        *rescode = do_get(cmd, res_buf, res_len);
+    } else if (cmd.size() == 3 && cmd_is(cmd[0], "set")) {
+        printf("set request\n");
+        *rescode = do_set(cmd, res_buf, res_len);
+    } else if (cmd.size() == 2 && cmd_is(cmd[0], "del")) {
+        printf("del request\n");
+        *rescode = do_del(cmd, res_buf, res_len);
+    } else {
+        *rescode = RES_ERR;
+        const char *msg = "Unknown cmd";
+        strcpy((char *)res_buf, msg);
+        *res_len = strlen(msg);
+        return 0;
+    }
+    return 0;
+}
 
 bool try_one_request(Conn* conn) {
     if (conn->rbuf_size < 4) {
@@ -84,14 +150,25 @@ bool try_one_request(Conn* conn) {
         return false;
     }
     // got one request, process it.
-    printf("client says: %.*s\n", len, &conn->rbuf[4 + conn->rbuf_offset]);
+    uint32_t rescode = 0;
+    uint32_t wlen = 0;
+    int32_t err = do_request(
+        &conn->rbuf[4 + conn->rbuf_offset], len, 
+        &rescode, &conn->wbuf[4 + 4 + conn->wbuf_size], &wlen
+    );
+    if (err) {
+        conn->state = STATE_END;
+        return false;
+    }
 
     // generating response.
-    memcpy(&conn->wbuf[conn->wbuf_size], &len, 4);
-    memcpy(&conn->wbuf[4 + conn->wbuf_size], &conn->rbuf[4 + conn->rbuf_offset], len);
-    conn->wbuf_size += len + 4;
-    printf("this is the wbuf_size as it grows: %d\n", (int) conn->wbuf_size);
-    
+    wlen += 4;
+    printf("response length %d\n", wlen);
+    // package |wlen|rescode|data| into wbuf
+    memcpy(&conn->wbuf[conn->wbuf_size], &wlen, 4);
+    memcpy(&conn->wbuf[conn->wbuf_size + 4], &rescode, 4);
+    conn->wbuf_size += 4 + wlen;
+
     // remove the request from rbuf.
     // note: frequent memmove is inefficient, need better handling in prod.
     size_t remain = conn->rbuf_size - len - 4;
