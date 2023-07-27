@@ -60,7 +60,14 @@ static int32_t read_res(int connfd) {
         return -1;
     }
     memcpy(&sz, &rbuf[0], 4);
+<<<<<<< HEAD
     printf("msg size is %d\n", sz);
+=======
+<<<<<<< HEAD
+    printf("msg size is %d\n", sz);
+=======
+>>>>>>> fbb251a (implemented get-set-del-ops for redis)
+>>>>>>> 8f656f6 (implemented get-set-del-ops for redis)
     if (sz > K_MAX_LENGTH) {
         msg("msg size too large", -1);
         return -1;

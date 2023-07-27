@@ -100,7 +100,16 @@ int32_t parse_req(
         pos += 4 + str_len;
     }
     if (pos != len) {
+<<<<<<< HEAD
 
+=======
+<<<<<<< HEAD
+
+=======
+        msg("trailing garbage...", 0);
+        return -1;
+>>>>>>> fbb251a (implemented get-set-del-ops for redis)
+>>>>>>> 8f656f6 (implemented get-set-del-ops for redis)
     }
     return 0;
 }
