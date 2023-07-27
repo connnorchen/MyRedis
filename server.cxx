@@ -100,7 +100,8 @@ int32_t parse_req(
         pos += 4 + str_len;
     }
     if (pos != len) {
-
+        msg("trailing garbage", 0);
+        return -1;
     }
     return 0;
 }
