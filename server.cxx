@@ -54,7 +54,6 @@ bool try_flush_buffer(Conn* conn) {
     conn->wbuf_sent += (size_t) rv;
     assert (conn->wbuf_sent <= conn->wbuf_size);
     if (conn->wbuf_sent == conn->wbuf_size) {
-        printf("sended %lu bytes\n", conn->wbuf_sent);
         conn->wbuf_size = 0;
         conn->wbuf_sent = 0;
         conn->state = STATE_REQ;
@@ -64,7 +63,6 @@ bool try_flush_buffer(Conn* conn) {
 }
 
 void state_res(Conn* conn) {
-    printf("starting responding to conn\n");
     while (try_flush_buffer(conn)) {}
 }
 
