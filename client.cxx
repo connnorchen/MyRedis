@@ -1,6 +1,9 @@
-#include <cstring>
+#include <cstring> 
+#include <iostream>
+#include <sstream>
 #include <netinet/in.h>
 #include <string.h>
+#include <string>
 #include <sys/socket.h>
 #include <stdio.h>
 #include <errno.h>
@@ -73,6 +76,45 @@ static int32_t read_res(int connfd) {
     return 0;
 }
 
+int32_t process_req(int fd, std::vector<std::string> cmd) {
+    int32_t err = send_req(fd, cmd);
+    if (err) {
+        return err;
+    }
+    
+    
+    err = read_res(fd);
+    if (err) {
+        std::stringstream s;
+        for (auto it = cmd.begin(); it != cmd.end(); it++)    {
+            if (it != cmd.begin()) {
+                s << " ";
+            }
+            s << *it;
+        }
+ 
+        printf("error [%d]: %s\n", err, s.str().c_str());
+    }
+    return 0;
+}
+
+int send_one_request(int argc, char** argv, int fd) {
+    std::vector<std::string> cmd;
+    for (int i = 1; i < argc; i++) {
+        cmd.push_back(argv[i]);
+    }
+    int32_t err = send_req(fd, cmd);
+    if (err) {
+        return err;
+    }
+
+    err = read_res(fd);
+    if (err) {
+        return err;
+    }
+    return 0;
+}
+
 int main(int argc, char** argv) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
@@ -87,20 +129,23 @@ int main(int argc, char** argv) {
     if (rv) {
         die("connect", errno);
     }
-
-    std::vector<std::string> cmd;
-    for (int i = 1; i < argc; i++) {
-        cmd.push_back(argv[i]);
-    }
-    int32_t err = send_req(fd, cmd);
-    if (err) {
+    if (send_one_request(argc, argv, fd)) {
         goto L_DONE;
     }
+    // for (int i = 0; i < 100000; i++) {
+    //     std::vector<std::string> cmd1 = {"set", std::to_string(i), std::to_string(i)};
+    //     process_req(fd, cmd1);
+    // }
 
-    err = read_res(fd);
-    if (err) {
-        goto L_DONE;
-    }
+    // for (int i = 0; i < 100000; i++) {
+    //     std::vector<std::string> cmd1 = {"get", std::to_string(i)};
+    //     process_req(fd, cmd1);
+    // }
+
+    // for (int i = 0; i < 100000; i++) {
+    //     std::vector<std::string> cmd1 = {"del", std::to_string(i)};
+    //     process_req(fd, cmd1);
+    // }
 
     // mimik a client hanging and ready to make another request
     while (true) {}
@@ -109,3 +154,4 @@ L_DONE:
     close(fd);
     return 0;
 }
+

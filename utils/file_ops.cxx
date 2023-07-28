@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include "util.h"
+#include "file_ops.h"
 
 void fd_set_nb(int fd) {
     errno = 0;

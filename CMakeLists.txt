@@ -9,8 +9,9 @@ add_executable(server server.cxx)
 add_executable(client client.cxx)
 
 add_subdirectory(utils)
+add_subdirectory(hashtable)
 
-target_link_libraries(server PUBLIC Utils)
+target_link_libraries(server PUBLIC Utils HashTable)
 target_link_libraries(client PUBLIC Utils)
 
 target_include_directories(server PUBLIC
