@@ -35,4 +35,6 @@ typedef struct Entry {
 HNode *hm_lookup(HMap *, HNode *, bool (*)(HNode *, HNode *));
 HNode *hm_pop(HMap *, HNode *, bool (*)(HNode *, HNode *));
 void hm_insert(HMap *, HNode *);
+size_t hm_size(HMap *);
+void hm_scan(HMap *, void (*) (HNode *, void *), void *);
 void hm_destroy(HMap *hmap);

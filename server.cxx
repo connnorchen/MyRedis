@@ -16,6 +16,7 @@
 #include "file_ops.h"
 #include "util.h"
 #include "ops.h"
+#include "serialize.h"
 
 enum {
     STATE_REQ = 0,
@@ -52,6 +53,7 @@ bool try_flush_buffer(Conn* conn) {
         return false;
     }
     conn->wbuf_sent += (size_t) rv;
+    printf("sended %lu bytes\n", conn->wbuf_sent);
     assert (conn->wbuf_sent <= conn->wbuf_size);
     if (conn->wbuf_sent == conn->wbuf_size) {
         conn->wbuf_size = 0;
@@ -104,29 +106,22 @@ int32_t parse_req(
     return 0;
 }
 
-int32_t do_request(const uint8_t *req_buf, 
-        int32_t len, uint32_t *rescode, 
-        uint8_t *res_buf, uint32_t *res_len) {
-    std::vector<std::string> cmd;
-    if (0 != parse_req(req_buf, len, cmd)) {
-        msg("bad request", -1);
-        return -1;
+int32_t do_request(std::vector<std::string> &cmd, std::string &out) {
+    if (cmd.size() == 1 && cmd_is(cmd[0], "keys")) {
+        printf("keys requests\n");
+        do_keys(cmd, out);
     }
-    if (cmd.size() == 2 && cmd_is(cmd[0], "get")) {
+    else if (cmd.size() == 2 && cmd_is(cmd[0], "get")) {
         printf("get request\n");
-        *rescode = do_get(cmd, res_buf, res_len);
+        do_get(cmd, out);
     } else if (cmd.size() == 3 && cmd_is(cmd[0], "set")) {
         printf("set request\n");
-        *rescode = do_set(cmd, res_buf, res_len);
+        do_set(cmd, out);
     } else if (cmd.size() == 2 && cmd_is(cmd[0], "del")) {
         printf("del request\n");
-        *rescode = do_del(cmd, res_buf, res_len);
+        do_del(cmd, out);
     } else {
-        *rescode = RES_ERR;
-        const char *msg = "Unknown cmd";
-        strcpy((char *)res_buf, msg);
-        *res_len = strlen(msg);
-        return 0;
+        out_err(out, ERR_UNKNOWN, "Unknown cmd");
     }
     return 0;
 }
@@ -148,25 +143,29 @@ bool try_one_request(Conn* conn) {
         msg("not enough data available, try in the next iteration", 0);
         return false;
     }
-    // got one request, process it.
-    uint32_t rescode = 0;
-    uint32_t wlen = 0;
-    int32_t err = do_request(
-        &conn->rbuf[4 + conn->rbuf_offset], len, 
-        &rescode, &conn->wbuf[4 + 4 + conn->wbuf_size], &wlen
-    );
-    if (err) {
+    std::vector<std::string> cmd;
+    if (parse_req(&conn->rbuf[4], len, cmd)) {
         conn->state = STATE_END;
         return false;
     }
+    std::string out;
+    do_request(cmd, out);
 
+    // got one request, process it.
+    if (4 + out.size() > K_MAX_LENGTH) {
+        out.clear();
+        out_err(out, ERR_2BIG, "response is too big");
+    }
+    printf("this is out's size %lu \n", out.size());
+    
     // generating response.
-    wlen += 4;
+    uint32_t wlen = (uint32_t) out.size();
     printf("response length %d\n", wlen);
     // package |wlen|rescode|data| into wbuf
     memcpy(&conn->wbuf[conn->wbuf_size], &wlen, 4);
-    memcpy(&conn->wbuf[conn->wbuf_size + 4], &rescode, 4);
+    memcpy(&conn->wbuf[conn->wbuf_size + 4], out.data(), wlen);
     conn->wbuf_size += 4 + wlen;
+    printf("wbuf_size %lu \n", conn->wbuf_size);
 
     // remove the request from rbuf.
     // note: frequent memmove is inefficient, need better handling in prod.

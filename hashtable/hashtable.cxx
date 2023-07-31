@@ -23,6 +23,20 @@ static void h_insert(HTab *htab, HNode *node) {
     htab->size++;
 }
 
+static void h_scan(HTab *htab, void (*f)(HNode *, void *), void *arg) {
+    if (htab->size == 0) {
+        return;
+    }
+
+    for (size_t i = 0; i < htab->mask + 1; i++) {
+        HNode* from = htab->tab[i];
+        while (from) {
+            f(from, arg);
+            from = from->next;
+        }
+    }
+}
+
 static HNode **h_lookup(HTab *htab, HNode *key, bool (*cmp)(HNode *, HNode *)) {
     if (!htab->tab) {
         return NULL;
@@ -120,6 +134,27 @@ HNode *hm_pop(
         return h_detach(&hmap->ht2, from);
     }
     return NULL;
+}
+
+size_t hm_size(
+    HMap *hmap
+) {
+    size_t sz = 0;
+    if (hmap->ht1.tab) {
+        sz += hmap->ht1.size;
+    }
+    
+    if (hmap->ht2.tab) {
+        sz += hmap->ht2.size;
+    }
+    return sz;
+}
+
+void hm_scan(
+    HMap *hmap, void (*f) (HNode *, void *), void *arg
+) {
+    h_scan(&hmap->ht1, f, arg);
+    h_scan(&hmap->ht2, f, arg);
 }
 
 void hm_destroy(HMap *hmap) {
