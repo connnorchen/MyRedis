@@ -4,6 +4,7 @@
 #include <netinet/in.h>
 #include <string.h>
 #include <string>
+#include <sys/_types/_int32_t.h>
 #include <sys/socket.h>
 #include <stdio.h>
 #include <errno.h>
@@ -13,6 +14,7 @@
 #include <arpa/inet.h>
 #include <netinet/ip.h>
 #include <vector>
+#include "serialize.h"
 #include "file_ops.h"
 #include "util.h"
 
@@ -42,7 +44,7 @@ static int32_t send_req(int connfd, std::vector<std::string> &cmd) {
     uint32_t sz = (uint32_t) cmd.size();
     memcpy(send_buf, &len, 4);
     memcpy(&send_buf[4], &sz, 4);
-    
+
     size_t pos = 8;
     for (const std::string &s: cmd) {
         uint32_t str_len = (uint32_t) s.size();
@@ -53,8 +55,95 @@ static int32_t send_req(int connfd, std::vector<std::string> &cmd) {
     return write_all(connfd, send_buf, len + 4);
 }
 
+static int32_t on_response(const uint8_t *data, size_t sz) {
+    if (sz < 1) {
+        msg("bad response", 0);
+        return -1;
+    }
+    switch (data[0]) {
+    case SER_NIL: {
+        printf("(nil)\n");
+        return 1;
+    }
+    case SER_ERR: {
+        // |SER_ERR|ERR_CODE|ERRLEN|ERRMSG|
+        if (sz < 1 + 8) {
+            msg("bad response", 0);
+            return -1;
+        }
+        int32_t err_code = 0;
+        memcpy(&err_code, &data[1], 4);
+        uint32_t msg_len = 0;
+        memcpy(&msg_len, &data[1 + 4], 4);
+        if (msg_len > K_MAX_LENGTH) {
+            msg("length too long", 0);
+            return -1;
+        }
+        if (sz < 1 + 8 + msg_len) {
+            msg("bad response", 0);
+            return -1;
+        }
+        printf("err [%d]: %.*s\n", err_code, msg_len, &data[1 + 4 + 4]);
+        return 1 + 8 + msg_len;
+    }
+    case SER_STR: {
+        // |SER_STR|STR_LEN|STR|
+        if (sz < 1 + 4) {
+            msg("bad response", 0);
+            return -1;
+        }
+        uint32_t msg_len = 0;
+        memcpy(&msg_len, &data[1], 4);
+        if (msg_len > K_MAX_LENGTH) {
+            msg("length too long", 0);
+            return -1;
+        }
+        if (sz < 1 + 4 + msg_len) {
+            msg("bad response", 0);
+            return -1;
+        }
+        printf("str: %.*s\n", msg_len, &data[5]);
+        return 1 + 4 + msg_len;
+    }
+    case SER_INT: {
+        // |SER_INT|INT
+        if (sz < 1 + 8) {
+            msg("bad response", 0);
+            return -1;
+        }
+        int64_t res = 0;
+        memcpy(&res, &data[1], 8);
+        printf("int: %lld\n", res);
+        return 1 + 8;
+    }
+    case SER_ARR: {
+        // |SER_ARR|INT|
+        if (sz < 1 + 4) {
+            msg("bad response", 0);
+            return -1;
+        }
+        uint32_t len = 0;
+        memcpy(&len, &data[1], 4);
+        printf("arr: len (%d)\n", len);
+        size_t cur_size = 1 + 4;
+        for (int i = 0; i < len; i++) {
+            int32_t rv = on_response(&data[cur_size], sz - cur_size);
+            if (rv < 0) {
+                return rv;
+            }
+            cur_size += rv;
+        }
+        printf("arr end\n");
+        return (int32_t) cur_size;
+    }
+    default:
+        msg("bad response");
+        return -1;
+    }
+}
+
 static int32_t read_res(int connfd) {
-    char rbuf[4 + K_MAX_LENGTH];
+    char rbuf[4 + K_MAX_LENGTH + 1];
     uint32_t sz = 0;
     int rv = read_full(connfd, &rbuf[0], 4);
     if (rv) {
@@ -69,10 +158,8 @@ static int32_t read_res(int connfd) {
     }
 
     rv = read_full(connfd, &rbuf[4], (size_t) sz);
-    uint32_t rescode = 0;
-    memcpy(&rescode, &rbuf[4], 4);
-    printf("server says: [%u] %.*s\n", rescode, sz - 4, &rbuf[4 + 4]);
-
+    printf("read %d bytes\n", sz);
+    on_response((uint8_t *) &rbuf[4], sz);
     return 0;
 }
 

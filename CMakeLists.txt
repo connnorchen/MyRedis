@@ -10,9 +10,12 @@ add_executable(client client.cxx)
 
 add_subdirectory(utils)
 add_subdirectory(hashtable)
+add_subdirectory(file_ops)
+add_subdirectory(ops)
+add_subdirectory(serialization)
 
-target_link_libraries(server PUBLIC Utils HashTable)
-target_link_libraries(client PUBLIC Utils)
+target_link_libraries(server PUBLIC Utils HashTable FileOps Ops Serialize)
+target_link_libraries(client PUBLIC Utils FileOps Serialize)
 
 target_include_directories(server PUBLIC
                            "${PROJECT_BINARY_DIR}"

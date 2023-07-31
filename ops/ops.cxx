@@ -1,8 +1,10 @@
+#include <_types/_uint32_t.h>
 #include <string>
 #include <vector>
 #include "file_ops.h"
 #include "ops.h"
 #include "hashtable.h"
+#include "serialize.h"
 
 static struct {
     HMap db;
@@ -22,9 +24,21 @@ static bool entry_eq(HNode *lhs, HNode *rhs) {
     return lhs->hcode == rhs->hcode && le->key == re->key;
 }
 
-int32_t do_get(
-    std::vector<std::string> &cmd, uint8_t *res_buf,
-    uint32_t *res_len) {
+static void scan_key(HNode *node, void* arg) {
+    std::string &out = *(std::string *)arg;
+    out_str(out, container_of(node, Entry, node)->key);
+}
+
+void do_keys(
+    std::vector<std::string> &cmd, std::string &out
+) {
+    (void)cmd;
+    out_arr(out, (uint32_t)hm_size(&g_data.db));    
+    hm_scan(&g_data.db, scan_key, (void *) &out); 
+}
+
+void do_get(
+    std::vector<std::string> &cmd, std::string &out) {
     Entry key;
     
     key.key.swap(cmd[1]);
@@ -32,22 +46,16 @@ int32_t do_get(
 
     HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
     if (!node) {
-        return RES_NX;
+        out_nil(out);
+        return;
     }
     
     const std::string &res = ((Entry *)container_of(node, Entry, node))->value;
     assert (res.size() <= K_MAX_LENGTH);
-    memcpy(res_buf, res.data(), res.size());
-    *res_len = (uint32_t) res.size();
-    return RES_OK;
+    return out_str(out, res);
 }
 
-int32_t do_set(
-    std::vector<std::string> &cmd, uint8_t* res_buf,
-    uint32_t *res_len) {
-    (void) res_buf;
-    (void) res_len;
-
+void do_set(std::vector<std::string> &cmd, std::string &out) {
     Entry key;
     key.key.swap(cmd[1]);
     key.node.hcode = str_hash((uint8_t *) key.key.data(), key.key.size());
@@ -62,15 +70,11 @@ int32_t do_set(
         ent->node.hcode = key.node.hcode;
         hm_insert(&g_data.db, &ent->node);
     }
-    return RES_OK;
+    printf("setting out to be nil");
+    return out_nil(out);
 }
 
-int32_t do_del(
-    std::vector<std::string> &cmd, uint8_t* res_buf,
-    uint32_t *res_len) {
-    (void) res_buf;
-    (void) res_len;
-
+void do_del(std::vector<std::string> &cmd, std::string &out) {
     Entry key;
     key.key.swap(cmd[1]);
     key.node.hcode = str_hash((uint8_t *) key.key.data(), key.key.size());
@@ -79,5 +83,5 @@ int32_t do_del(
     if (node) {
         delete container_of(node, Entry, node);
     }
-    return RES_OK;
+    return out_int(out, node ? 1 : 0);
 }
