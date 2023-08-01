@@ -13,6 +13,7 @@ add_subdirectory(hashtable)
 add_subdirectory(file_ops)
 add_subdirectory(ops)
 add_subdirectory(serialization)
+add_subdirectory(avl_trees)
 
 target_link_libraries(server PUBLIC Utils HashTable FileOps Ops Serialize)
 target_link_libraries(client PUBLIC Utils FileOps Serialize)
