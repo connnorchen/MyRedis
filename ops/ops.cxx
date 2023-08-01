@@ -1,6 +1,7 @@
 #include <_types/_uint32_t.h>
 #include <string>
 #include <vector>
+#include "util.h"
 #include "file_ops.h"
 #include "ops.h"
 #include "hashtable.h"
