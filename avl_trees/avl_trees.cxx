@@ -128,3 +128,42 @@ AVLNode *avl_del(AVLNode *node) {
         }
     }
 }
+
+AVLNode *avl_offset(AVLNode *avl_node, int64_t offset) {
+    int64_t pos = 0;
+    while (pos != offset) {
+        // tend to go right
+        if (pos < offset && pos + avl_cnt(avl_node->right) >= offset) {
+            avl_node = avl_node->right;
+            pos += avl_cnt(avl_node->left) + 1;
+        } else if (pos > offset && pos - avl_cnt(avl_node->left) <= offset) {
+            avl_node = avl_node->left;
+            pos -= avl_cnt(avl_node->right) + 1;
+        } else {
+            AVLNode *parent = avl_node->parent;
+            if (!parent) {
+                return NULL;
+            }
+            if (parent->right == avl_node) {
+                pos -= avl_cnt(avl_node->left) + 1;
+            } else {
+                pos += avl_cnt(avl_node->right) + 1;
+            }
+            avl_node = parent;
+        }
+    }
+    return avl_node;
+}
+
+int32_t avl_rank(AVLNode *avl_node) {
+    int32_t rank = 0;
+    while (avl_node->parent) {
+        if (avl_node->parent->right == avl_node) {
+            rank -= avl_cnt(avl_node->left) + 1;
+        } else {
+            rank += avl_cnt(avl_node->right) + 1;
+        }
+        avl_node = avl_node->parent;
+    }
+    return -1 * rank + avl_cnt(avl_node->left) + 1;
+}

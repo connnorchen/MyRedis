@@ -110,8 +110,7 @@ int32_t do_request(std::vector<std::string> &cmd, std::string &out) {
     if (cmd.size() == 1 && cmd_is(cmd[0], "keys")) {
         printf("keys requests\n");
         do_keys(cmd, out);
-    }
-    else if (cmd.size() == 2 && cmd_is(cmd[0], "get")) {
+    } else if (cmd.size() == 2 && cmd_is(cmd[0], "get")) {
         printf("get request\n");
         do_get(cmd, out);
     } else if (cmd.size() == 3 && cmd_is(cmd[0], "set")) {
@@ -120,6 +119,27 @@ int32_t do_request(std::vector<std::string> &cmd, std::string &out) {
     } else if (cmd.size() == 2 && cmd_is(cmd[0], "del")) {
         printf("del request\n");
         do_del(cmd, out);
+    } else if (cmd.size() == 4 && cmd_is(cmd[0], "zadd")) {
+        printf("zadd request\n");
+        do_zadd(cmd, out);
+    } else if (cmd.size() == 3 && cmd_is(cmd[0], "zrem")) {
+        printf("zrem request\n");
+        do_zrem(cmd, out);
+    } else if (cmd.size() == 3 && cmd_is(cmd[0], "zscore")) {
+        printf("zscore request\n");
+        do_zscore(cmd, out);
+    } else if (cmd.size() == 6 && cmd_is(cmd[0], "zquery")) {
+        printf("zquery request\n");
+        do_zquery(cmd, out);
+    } else if (cmd.size() == 3 && cmd_is(cmd[0], "zrank")) {
+        printf("zrank request\n");
+        do_zrank(cmd, out);
+    } else if (cmd.size() == 3 && cmd_is(cmd[0], "zrrank")) {
+        printf("zrrank request\n");
+        do_zrrank(cmd, out);
+    } else if (cmd.size() == 4 && cmd_is(cmd[0], "zrange")) {
+        printf("zrange request\n");
+        do_zrange(cmd, out);
     } else {
         out_err(out, ERR_UNKNOWN, "Unknown cmd");
     }

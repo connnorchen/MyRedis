@@ -116,6 +116,17 @@ static int32_t on_response(const uint8_t *data, size_t sz) {
         printf("int: %lld\n", res);
         return 1 + 8;
     }
+    case SER_DBL: {
+        // |SER_INT|INT
+        if (sz < 1 + 8) {
+            msg("bad response", 0);
+            return -1;
+        }
+        double res = 0;
+        memcpy(&res, &data[1], 8);
+        printf("double: %lf\n", res);
+        return 1 + 8;
+    }
     case SER_ARR: {
         // |SER_ARR|INT|
         if (sz < 1 + 4) {
@@ -235,7 +246,6 @@ int main(int argc, char** argv) {
     // }
 
     // mimik a client hanging and ready to make another request
-    while (true) {}
     
 L_DONE:
     close(fd);

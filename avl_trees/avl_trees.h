@@ -15,3 +15,5 @@ uint32_t avl_depth(AVLNode *node);
 uint32_t avl_cnt(AVLNode *node);
 uint32_t max(uint32_t lhs, uint32_t rhs);
 void avl_update(AVLNode *node);
+AVLNode *avl_offset(AVLNode *avl_node, int64_t offset);
+int32_t avl_rank(AVLNode *avl_node);
