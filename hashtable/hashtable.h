@@ -24,13 +24,6 @@ typedef struct HMap {
     size_t resizing_pos = 0;
 } HMap;
 
-// the structure for the key
-typedef struct Entry {
-    HNode node;
-    std::string key;
-    std::string value;
-} Entry;
-
 
 HNode *hm_lookup(HMap *, HNode *, bool (*)(HNode *, HNode *));
 HNode *hm_pop(HMap *, HNode *, bool (*)(HNode *, HNode *));
