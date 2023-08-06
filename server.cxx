@@ -1,6 +1,8 @@
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <sys/_types/_fd_def.h>
+#include <sys/_types/_timespec.h>
 #include <sys/errno.h>
 #include <sys/fcntl.h>
 #include <sys/poll.h>
@@ -17,6 +19,7 @@
 #include "util.h"
 #include "ops.h"
 #include "serialize.h"
+#include "linked_list.h"
 
 enum {
     STATE_REQ = 0,
@@ -26,7 +29,11 @@ enum {
 
 typedef struct Conn {
     int fd = -1;
-    uint32_t state = 0; // either STATE_REQ or STATE_RES
+    // timer
+    uint64_t idle_start = 0;
+    DList idle_list;
+    // either STATE_REQ or STATE_RES
+    uint32_t state = 0;
     // buffer for reading
     size_t rbuf_size = 0;
     uint8_t rbuf[4 + K_MAX_LENGTH];
@@ -36,6 +43,16 @@ typedef struct Conn {
     size_t wbuf_sent = 0;
     uint8_t wbuf[4 + K_MAX_LENGTH]; 
 } Conn;
+
+static struct {
+    // map of all client connections, keyed by fd.
+    std::vector<Conn *> fd2conn;
+    
+    // timers for idle connections.
+    DList idle_list;
+} g_data;
+
+const uint64_t k_idle_timeout_ms = 5 * 1000;
 
 bool try_flush_buffer(Conn* conn) {
     ssize_t rv = 0;
@@ -197,41 +214,6 @@ bool try_one_request(Conn* conn) {
     return (conn->state == STATE_REQ);
 }
 
-void conn_put(std::vector<Conn * > &fd2conn, Conn* new_conn) {
-    if ((size_t) new_conn->fd >= fd2conn.size()) {
-        fd2conn.resize(new_conn->fd + 1);
-        printf("resized fd2conn\n");
-    }
-    fd2conn[new_conn->fd] = new_conn;
-}
-
-int accept_new_connection(std::vector<Conn *> &fd2conn, int fd) {
-    // accept
-    struct sockaddr_in client_addr = {};
-    socklen_t socklen = sizeof(client_addr);
-    int connfd = accept(fd, (struct sockaddr *)&client_addr, &socklen);
-    if (connfd < 0) {
-        return -1; // error
-    }
-    printf("accepted new connection\n");
-
-    fd_set_nb(connfd);
-    Conn *new_conn = (Conn *) malloc(sizeof(Conn));
-    printf("new_conn addr: %p\n", new_conn);
-    if (!new_conn) {
-        close(connfd);
-        return -1;
-    }
-    new_conn->fd = connfd;
-    new_conn->state = STATE_REQ;
-    new_conn->rbuf_size = 0;
-    new_conn->wbuf_size = 0;
-    new_conn->wbuf_sent = 0;
-    conn_put(fd2conn, new_conn);
-    return 0;
-}
-
-
 bool try_fill_buffer(Conn* conn) {
     assert (conn->rbuf_size < sizeof(conn->rbuf));
     
@@ -283,7 +265,35 @@ void state_req(Conn* conn) {
 }
 
 
+static uint64_t get_mononic_usec() {
+    timespec tv = {0, 0};
+    clock_gettime(CLOCK_MONOTONIC, &tv);
+    return uint64_t(tv.tv_sec) * 1000000 + tv.tv_nsec / 1000;
+}
+
+static uint32_t next_timer_ms() {
+    if (dlist_empty(&g_data.idle_list)) {
+        return 10000; 
+    }
+    
+    uint64_t now_us = get_mononic_usec();
+    DList *next = g_data.idle_list.next;
+    Conn *next_conn = container_of(next, Conn, idle_list);
+    uint64_t next_start = next_conn->idle_start + k_idle_timeout_ms * 1000; 
+    if (next_start <= now_us) {
+        // missed
+        return 0;
+    }
+    return (uint32_t) ((next_start - now_us) / 1000);
+}
+
 void connection_io(Conn* conn) {
+    // wake up by poll, update the idle timer
+    // by moving conn in front of the idle list.
+    conn->idle_start = get_mononic_usec();
+    dlist_detach(&conn->idle_list);
+    dlist_insert_before(&g_data.idle_list, &conn->idle_list);
+
     if (conn->state == STATE_REQ) {
         printf("connection starts requests\n");
         state_req(conn);
@@ -295,6 +305,64 @@ void connection_io(Conn* conn) {
     }
 }
 
+
+void conn_put(Conn* new_conn) {
+    if ((size_t) new_conn->fd >= g_data.fd2conn.size()) {
+        g_data.fd2conn.resize(new_conn->fd + 1);
+        printf("resized fd2conn\n");
+    }
+    g_data.fd2conn[new_conn->fd] = new_conn;
+}
+
+void conn_done(Conn* conn) {
+    printf("conn fd %d state reach to the end, freeing the memory\n", conn->fd);
+    g_data.fd2conn[conn->fd] = NULL;
+    (void)close(conn->fd);
+    dlist_detach(&conn->idle_list);
+    free(conn);
+}
+
+int accept_new_connection(std::vector<Conn *> &fd2conn, int fd) {
+    // accept
+    struct sockaddr_in client_addr = {};
+    socklen_t socklen = sizeof(client_addr);
+    int connfd = accept(fd, (struct sockaddr *)&client_addr, &socklen);
+    if (connfd < 0) {
+        return -1; // error
+    }
+    printf("accepted new connection\n");
+
+    fd_set_nb(connfd);
+    Conn *new_conn = (Conn *) malloc(sizeof(Conn));
+    printf("new_conn addr: %p\n", new_conn);
+    if (!new_conn) {
+        close(connfd);
+        return -1;
+    }
+    new_conn->fd = connfd;
+    new_conn->state = STATE_REQ;
+    new_conn->rbuf_size = 0;
+    new_conn->wbuf_size = 0;
+    new_conn->wbuf_sent = 0;
+    new_conn->idle_start = get_mononic_usec();
+    dlist_insert_before(&g_data.idle_list, &new_conn->idle_list);
+    conn_put(new_conn);
+    return 0;
+}
+
+static void process_timers() {
+    uint64_t now_us = get_mononic_usec();
+    while (!dlist_empty(&g_data.idle_list)) {
+        Conn *next_conn = container_of(g_data.idle_list.next, Conn, idle_list);
+        uint64_t next_start = next_conn->idle_start + k_idle_timeout_ms * 1000; 
+        if (next_start >= now_us + 1000) {
+            break;
+        }
+        
+        printf("removing idle connection %d\n", next_conn->fd);
+        conn_done(next_conn);
+    }
+}
 
 int main() {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -318,21 +386,21 @@ int main() {
         die("listen()", errno);
     }
 
-    // map of all client connections, keyed by fd.
-    std::vector<Conn *> fd2conn;
-
-    // set the listen 
+    // set the listener as non-blocking.
     fd_set_nb(fd);
 
-    std::vector<struct pollfd> poll_args;
+    // set the idle_list
+    dlist_init(&g_data.idle_list);
 
+    // the event loop
+    std::vector<struct pollfd> poll_args;
     while (true) {
         poll_args.clear();
         // for convenience, the listening fd is put in the first position.
         struct pollfd pfd = {fd, POLLIN, 0};
         poll_args.push_back(pfd);
         // connection fds
-        for (Conn *conn : fd2conn) {
+        for (Conn *conn : g_data.fd2conn) {
             if (!conn) {
                 continue;
             }
@@ -346,7 +414,8 @@ int main() {
         
         // poll for the active fds.
         // timeout doesn't matter here
-        int rv = poll(poll_args.data(), (nfds_t) poll_args.size(), 1000);
+        int timeout_ms = (int)next_timer_ms();
+        int rv = poll(poll_args.data(), (nfds_t) poll_args.size(), timeout_ms);
         if (rv < 0) {
             die("poll", errno);
         }
@@ -356,20 +425,22 @@ int main() {
             pollfd poll_arg = poll_args[i];
             if (poll_arg.revents) {
                 printf("fd %d has new request\n", poll_arg.fd);
-                Conn *conn = fd2conn[poll_arg.fd]; 
+                Conn *conn = g_data.fd2conn[poll_arg.fd]; 
                 connection_io(conn);
                 if (conn->state == STATE_END) {
-                    printf("conn fd %d state reach to the end, freeing the memory\n", poll_arg.fd);
-                    fd2conn[conn->fd] = NULL;
-                    (void) close(conn->fd);
-                    free(conn);
+                    // client closed normally, or something bad happened.
+                    // destroy this connection
+                    conn_done(conn);
                 }
             }
         }
 
+        // handle timers
+        process_timers();
+
         // try to accept new connection
         if (poll_args[0].revents) {
-            (void) accept_new_connection(fd2conn, fd);
+            (void) accept_new_connection(g_data.fd2conn, fd);
         }
     }
     return 0;
