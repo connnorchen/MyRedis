@@ -5,10 +5,6 @@
 #include "ops.h"
 #include "serialize.h"
 
-static struct {
-    HMap db;
-} g_data;
-
 
 static bool entry_eq(HNode *lhs, HNode *rhs) {
     Entry *le = container_of(lhs, Entry, node);
@@ -22,21 +18,21 @@ static void scan_key(HNode *node, void* arg) {
 }
 
 void do_keys(
-    std::vector<std::string> &cmd, std::string &out
+    std::vector<std::string> &cmd, std::string &out, HMap *db
 ) {
     (void)cmd;
-    out_arr(out, (uint32_t)hm_size(&g_data.db));    
-    hm_scan(&g_data.db, scan_key, (void *) &out); 
+    out_arr(out, (uint32_t)hm_size(db));    
+    hm_scan(db, scan_key, (void *) &out); 
 }
 
 void do_get(
-    std::vector<std::string> &cmd, std::string &out) {
+    std::vector<std::string> &cmd, std::string &out, HMap *db) {
     Entry key;
     
     key.key.swap(cmd[1]);
     key.node.hcode = str_hash((uint8_t *) key.key.data(), key.key.size());
 
-    HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
+    HNode *node = hm_lookup(db, &key.node, &entry_eq);
     if (!node) {
         out_nil(out);
         return;
@@ -51,12 +47,12 @@ void do_get(
     return out_str(out, res);
 }
 
-void do_set(std::vector<std::string> &cmd, std::string &out) {
+void do_set(std::vector<std::string> &cmd, std::string &out, HMap *db) {
     Entry key;
     key.key.swap(cmd[1]);
     key.node.hcode = str_hash((uint8_t *) key.key.data(), key.key.size());
     
-    HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
+    HNode *node = hm_lookup(db, &key.node, &entry_eq);
     if (node) {
         container_of(node, Entry, node)->value.swap(cmd[2]);
     } else {
@@ -65,18 +61,58 @@ void do_set(std::vector<std::string> &cmd, std::string &out) {
         ent->value.swap(cmd[2]);
         ent->type = T_STR;
         ent->node.hcode = key.node.hcode;
-        hm_insert(&g_data.db, &ent->node);
+        hm_insert(db, &ent->node);
     }
     printf("setting out to be nil");
     return out_nil(out);
 }
 
-void do_del(std::vector<std::string> &cmd, std::string &out) {
+void do_expire(std::vector<std::string> &cmd, std::string &out, 
+        HMap *db, void (*entry_set_ttl)(Entry *, int64_t)) {
+    int64_t ttl_ms = 0;
+    if (!str2ll(cmd[2], ttl_ms)) {
+        return out_err(out, ERR_ARG, "expect int64");
+    }
+
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+
+    HNode *node = hm_lookup(db, &key.node, &entry_eq);
+    if (node) {
+        Entry *ent = container_of(node, Entry, node);
+        entry_set_ttl(ent, ttl_ms);
+    }
+    return out_int(out, node ? 1: 0);
+}
+
+void do_ttl(std::vector<std::string> &cmd, std::string &out, 
+        HMap *db, std::vector<HeapItem> &heap) {
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+
+    HNode *node = hm_lookup(db, &key.node, &entry_eq);
+    if (!node) {
+        return out_int(out, -2);
+    }
+
+    Entry *ent = container_of(node, Entry, node);
+    if (ent->heap_idx == (size_t)-1) {
+        return out_int(out, -1);
+    }
+
+    uint64_t expire_at = heap[ent->heap_idx].val;
+    uint64_t now_us = get_mononic_usec();
+    return out_int(out, expire_at > now_us ? (expire_at - now_us) / 1000 : 0);
+}
+
+void do_del(std::vector<std::string> &cmd, std::string &out, HMap *db) {
     Entry key;
     key.key.swap(cmd[1]);
     key.node.hcode = str_hash((uint8_t *) key.key.data(), key.key.size());
     
-    HNode *node = hm_pop(&g_data.db, &key.node, &entry_eq);
+    HNode *node = hm_pop(db, &key.node, &entry_eq);
     if (node) {
         delete container_of(node, Entry, node);
     }
@@ -84,7 +120,7 @@ void do_del(std::vector<std::string> &cmd, std::string &out) {
 }
 
 // zadd zset_name score name
-void do_zadd(std::vector<std::string> &cmd, std::string &out) {
+void do_zadd(std::vector<std::string> &cmd, std::string &out, HMap *db) {
     double score = 0;
     if (!str2dbl(cmd[2], score)) {
         return out_err(out, ERR_ARG, "you must pass in score to zset");
@@ -94,7 +130,7 @@ void do_zadd(std::vector<std::string> &cmd, std::string &out) {
     key.key.swap(cmd[1]);
     key.node.hcode = str_hash((uint8_t *) key.key.data(), key.key.size());
 
-    HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
+    HNode *node = hm_lookup(db, &key.node, &entry_eq);
     Entry *ent = NULL;
     if (!node) {
         ent = new Entry();
@@ -103,7 +139,7 @@ void do_zadd(std::vector<std::string> &cmd, std::string &out) {
         ent->node.hcode = key.node.hcode;
         ent->zset = new ZSet();
         // add to global key space db
-        hm_insert(&g_data.db, &ent->node);
+        hm_insert(db, &ent->node);
     } else {
         ent = container_of(node, Entry, node);
         if (ent->type != T_ZSET) {
@@ -116,12 +152,12 @@ void do_zadd(std::vector<std::string> &cmd, std::string &out) {
 }
 
 // Return true if out is verified as zset and set ent as corresponding entry
-static bool verify_zset(std::string &out, std::string &name, Entry **ent) {
+static bool verify_zset(std::string &out, std::string &name, Entry **ent, HMap *db) {
     Entry key;
     key.key.swap(name);
     key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
 
-    HNode *hnode = hm_lookup(&g_data.db, &key.node, &entry_eq);
+    HNode *hnode = hm_lookup(db, &key.node, &entry_eq);
     if (!hnode) {
         out_nil(out);
         return false;
@@ -135,9 +171,9 @@ static bool verify_zset(std::string &out, std::string &name, Entry **ent) {
 }
 
 // zrem zset_name name
-void do_zrem(std::vector<std::string> &cmd, std::string &out) {
+void do_zrem(std::vector<std::string> &cmd, std::string &out, HMap *db) {
     Entry* ent = NULL;
-    if (!verify_zset(out, cmd[1], &ent)) {
+    if (!verify_zset(out, cmd[1], &ent, db)) {
         out_nil(out);
         return;
     }
@@ -150,9 +186,9 @@ void do_zrem(std::vector<std::string> &cmd, std::string &out) {
 }
 
 // zscore zset_name name
-void do_zscore(std::vector<std::string> &cmd, std::string &out) {
+void do_zscore(std::vector<std::string> &cmd, std::string &out, HMap *db) {
     Entry *ent = NULL;
-    if (!verify_zset(out, cmd[1], &ent)) {
+    if (!verify_zset(out, cmd[1], &ent, db)) {
         out_nil(out);
         return;
     }
@@ -162,7 +198,7 @@ void do_zscore(std::vector<std::string> &cmd, std::string &out) {
 }
 
 // zquery zset_name score name offset limit
-void do_zquery(std::vector<std::string> &cmd, std::string &out) {
+void do_zquery(std::vector<std::string> &cmd, std::string &out, HMap *db) {
     double score = 0;
     if (!str2dbl(cmd[2], score)) {
         return out_err(
@@ -194,7 +230,7 @@ void do_zquery(std::vector<std::string> &cmd, std::string &out) {
     }
 
     Entry *ent = NULL;
-    if (!verify_zset(out, cmd[1], &ent)) {
+    if (!verify_zset(out, cmd[1], &ent, db)) {
         if (out[0] == SER_NIL) {
             out.clear();
             out_arr(out, 0);
@@ -234,9 +270,9 @@ void do_zquery(std::vector<std::string> &cmd, std::string &out) {
 }
 
 // zrank zset_name name
-void do_zrank(std::vector<std::string> &cmd, std::string &out) {
+void do_zrank(std::vector<std::string> &cmd, std::string &out, HMap *db) {
     Entry *ent = NULL;
-    if (!verify_zset(out, cmd[1], &ent)) {
+    if (!verify_zset(out, cmd[1], &ent, db)) {
         out_nil(out);
         return;
     }
@@ -251,9 +287,9 @@ void do_zrank(std::vector<std::string> &cmd, std::string &out) {
 }
 
 // zrank zset_name name
-void do_zrrank(std::vector<std::string> &cmd, std::string &out) {
+void do_zrrank(std::vector<std::string> &cmd, std::string &out, HMap *db) {
     Entry *ent = NULL;
-    if (!verify_zset(out, cmd[1], &ent)) {
+    if (!verify_zset(out, cmd[1], &ent, db)) {
         out_nil(out);
         return;
     }
@@ -268,7 +304,7 @@ void do_zrrank(std::vector<std::string> &cmd, std::string &out) {
 }
 
 // zrange zset_name left_bound right_bound
-void do_zrange(std::vector<std::string> &cmd, std::string &out) {
+void do_zrange(std::vector<std::string> &cmd, std::string &out, HMap *db) {
     double left_bound = 0;
     double right_bound = 0;
     if (!str2dbl(cmd[2], left_bound)) {
@@ -286,7 +322,7 @@ void do_zrange(std::vector<std::string> &cmd, std::string &out) {
     }
 
     Entry *ent = NULL;
-    if (!verify_zset(out, cmd[1], &ent)) {
+    if (!verify_zset(out, cmd[1], &ent, db)) {
         out_nil(out);
         return;
     }
