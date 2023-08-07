@@ -5,6 +5,7 @@ enum {
     ERR_2BIG = 2,
     ERR_ARG = 3,
     ERR_TYPE = 4,
+    ERR_DELETED = 5,
 };
 
 #define container_of(ptr, type, member) ({                  \

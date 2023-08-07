@@ -19,6 +19,7 @@
 #include "util.h"
 #include "ops.h"
 #include "serialize.h"
+#include "thread_pools.h"
 
 enum {
     STATE_REQ = 0,
@@ -51,6 +52,8 @@ static struct {
     std::vector<Conn *> fd2conn;
     // heap data structure for ttl entry
     std::vector<HeapItem> heap;
+    // thread pools
+    ThreadPools tp;
 } g_data;
 
 const uint64_t k_idle_timeout_ms = 5 * 1000;
@@ -100,6 +103,43 @@ static void entry_set_ttl(Entry *ent, int64_t ttl_ms) {
         HeapItem &old_item = g_data.heap[pos];
         old_item.val = get_mononic_usec() + (uint64_t)ttl_ms * 1000;;
         heap_update(g_data.heap.data(), pos, g_data.heap.size());
+    }
+}
+
+// delete the ent completely
+static void entry_destroy(Entry *ent) {
+    switch (ent->type) {
+        case T_ZSET:
+            dispose_zset(ent->zset);
+            delete ent->zset;
+            break;
+    }
+    delete ent;
+    printf("deleted the whole ent\n");
+}
+
+static void entry_destroy_async(void *arg) {
+    entry_destroy((Entry *)arg);
+}
+
+static void entry_del(Entry *ent) {
+    if (ent->heap_idx != (size_t)-1) {
+        entry_set_ttl(ent, -1);
+    }
+    
+    const size_t k_large_zset = 5;
+    bool too_big = false;
+    switch (ent->type) {
+        case T_ZSET:
+            too_big = hm_size(&ent->zset->hmap) > k_large_zset;
+            break;
+    }
+    if (too_big) {
+        printf("added to thread pool\n");
+        thread_pool_queue(&g_data.tp, &entry_destroy_async, (void *)ent);
+    } else {
+        printf("simple destroy\n");
+        entry_destroy(ent);
     }
 }
 
@@ -184,7 +224,7 @@ int32_t do_request(std::vector<std::string> &cmd, std::string &out) {
         do_set(cmd, out, &g_data.db);
     } else if (cmd.size() == 2 && cmd_is(cmd[0], "del")) {
         printf("del request\n");
-        do_del(cmd, out, &g_data.db);
+        do_del(cmd, out, &g_data.db, &entry_del);
     } else if (cmd.size() == 4 && cmd_is(cmd[0], "zadd")) {
         printf("zadd request\n");
         do_zadd(cmd, out, &g_data.db);
@@ -258,7 +298,6 @@ bool try_one_request(Conn* conn) {
     memcpy(&conn->wbuf[conn->wbuf_size + 4], out.data(), wlen);
     conn->wbuf_size += 4 + wlen;
     printf("wbuf_size %lu \n", conn->wbuf_size);
-
     // remove the request from rbuf.
     // note: frequent memmove is inefficient, need better handling in prod.
     size_t remain = conn->rbuf_size - len - 4;
@@ -320,7 +359,6 @@ bool try_fill_buffer(Conn* conn) {
 void state_req(Conn* conn) {
     while (try_fill_buffer(conn)) {}
 }
-
 
 void connection_io(Conn* conn) {
     // wake up by poll, update the idle timer
@@ -385,17 +423,6 @@ int accept_new_connection(int fd) {
     return 0;
 }
 
-static void entry_del(Entry *ent) {
-    switch (ent->type) {
-        case T_ZSET:
-            dispose_zset(ent->zset);
-            delete ent->zset;
-            break;
-    }
-    entry_set_ttl(ent, -1);
-    delete ent;
-}
-
 static bool hnode_same(HNode *lhs, HNode *rhs) {
     return lhs == rhs;
 }
@@ -455,6 +482,9 @@ int main() {
 
     // set the idle_list
     dlist_init(&g_data.idle_list);
+
+    // set the thread pools
+    thread_pool_init(&g_data.tp, 4);
 
     // the event loop
     std::vector<struct pollfd> poll_args;

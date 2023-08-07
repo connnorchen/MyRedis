@@ -107,14 +107,15 @@ void do_ttl(std::vector<std::string> &cmd, std::string &out,
     return out_int(out, expire_at > now_us ? (expire_at - now_us) / 1000 : 0);
 }
 
-void do_del(std::vector<std::string> &cmd, std::string &out, HMap *db) {
+void do_del(std::vector<std::string> &cmd, std::string &out, HMap *db, 
+        void (*entry_del)(Entry *)) {
     Entry key;
     key.key.swap(cmd[1]);
     key.node.hcode = str_hash((uint8_t *) key.key.data(), key.key.size());
     
     HNode *node = hm_pop(db, &key.node, &entry_eq);
     if (node) {
-        delete container_of(node, Entry, node);
+        entry_del(container_of(node, Entry, node));
     }
     return out_int(out, node ? 1 : 0);
 }
@@ -174,7 +175,6 @@ static bool verify_zset(std::string &out, std::string &name, Entry **ent, HMap *
 void do_zrem(std::vector<std::string> &cmd, std::string &out, HMap *db) {
     Entry* ent = NULL;
     if (!verify_zset(out, cmd[1], &ent, db)) {
-        out_nil(out);
         return;
     }
     std::string &s = cmd[2];
@@ -189,7 +189,6 @@ void do_zrem(std::vector<std::string> &cmd, std::string &out, HMap *db) {
 void do_zscore(std::vector<std::string> &cmd, std::string &out, HMap *db) {
     Entry *ent = NULL;
     if (!verify_zset(out, cmd[1], &ent, db)) {
-        out_nil(out);
         return;
     }
     std::string &s = cmd[2];
@@ -273,7 +272,6 @@ void do_zquery(std::vector<std::string> &cmd, std::string &out, HMap *db) {
 void do_zrank(std::vector<std::string> &cmd, std::string &out, HMap *db) {
     Entry *ent = NULL;
     if (!verify_zset(out, cmd[1], &ent, db)) {
-        out_nil(out);
         return;
     }
     
@@ -323,7 +321,6 @@ void do_zrange(std::vector<std::string> &cmd, std::string &out, HMap *db) {
 
     Entry *ent = NULL;
     if (!verify_zset(out, cmd[1], &ent, db)) {
-        out_nil(out);
         return;
     }
     return out_int(out, zrange(ent->zset, left_bound, right_bound));

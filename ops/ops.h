@@ -29,7 +29,7 @@ typedef struct Entry {
 void do_keys(std::vector<std::string> &cmd, std::string &out, HMap *db);
 void do_get(std::vector<std::string> &cmd, std::string &out, HMap *db);
 void do_set(std::vector<std::string> &cmd, std::string &out, HMap *db);
-void do_del(std::vector<std::string> &cmd, std::string &out, HMap *db);
+void do_del(std::vector<std::string> &cmd, std::string &out, HMap *db, void (*entry_del)(Entry *));
 void do_zadd(std::vector<std::string> &cmd, std::string &out, HMap *db);
 void do_zrem(std::vector<std::string> &cmd, std::string &out, HMap *db);
 void do_zscore(std::vector<std::string> &cmd, std::string &out, HMap *db);
