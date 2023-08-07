@@ -230,10 +230,6 @@ int main(int argc, char** argv) {
     if (send_one_request(argc, argv, fd)) {
         goto L_DONE;
     }
-    sleep(4);
-    if (send_one_request(argc, argv, fd)) {
-        goto L_DONE;
-    }
     // for (int i = 0; i < 100000; i++) {
     //     std::vector<std::string> cmd1 = {"set", std::to_string(i), std::to_string(i)};
     //     process_req(fd, cmd1);
@@ -250,7 +246,6 @@ int main(int argc, char** argv) {
     // }
 
     // mimik a client hanging and ready to make another request
-    while (true) {}
     
 L_DONE:
     close(fd);

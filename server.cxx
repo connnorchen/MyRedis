@@ -19,7 +19,6 @@
 #include "util.h"
 #include "ops.h"
 #include "serialize.h"
-#include "linked_list.h"
 
 enum {
     STATE_REQ = 0,
@@ -45,14 +44,64 @@ typedef struct Conn {
 } Conn;
 
 static struct {
-    // map of all client connections, keyed by fd.
-    std::vector<Conn *> fd2conn;
-    
+    HMap db;
     // timers for idle connections.
     DList idle_list;
+    // connection vector
+    std::vector<Conn *> fd2conn;
+    // heap data structure for ttl entry
+    std::vector<HeapItem> heap;
 } g_data;
 
 const uint64_t k_idle_timeout_ms = 5 * 1000;
+
+static uint32_t next_timer_ms() {
+    uint64_t now_us = get_mononic_usec();
+    uint64_t next_us = -1;
+    if (!dlist_empty(&g_data.idle_list)) {
+        DList *next = g_data.idle_list.next;
+        Conn *next_conn = container_of(next, Conn, idle_list);
+        next_us = next_conn->idle_start + k_idle_timeout_ms * 1000; 
+    }
+
+    if (!g_data.heap.empty() && g_data.heap[0].val < next_us) {
+        next_us = g_data.heap[0].val;
+    }
+    
+    if (next_us == (size_t) -1) {
+        return 10000; // no timer, value doesn't matter;
+    }
+
+    if (next_us <= now_us) {
+        // missed
+        return 0;
+    }
+    return (uint32_t) ((next_us - now_us) / 1000);
+}
+
+static void entry_set_ttl(Entry *ent, int64_t ttl_ms) {
+    size_t pos = ent->heap_idx;
+    if (ttl_ms < 0 && pos != (size_t)-1) {
+        // erase an item from heap
+        g_data.heap[pos] = g_data.heap.back();
+        g_data.heap.pop_back();
+        if (pos < g_data.heap.size()) {
+            heap_update(g_data.heap.data(), pos, g_data.heap.size());
+        }
+        ent->heap_idx = -1;
+    } else {
+        if (pos == -1) {
+            // append a new item into heap
+            HeapItem item;
+            item.ref = &ent->heap_idx;
+            g_data.heap.push_back(item);
+            pos = g_data.heap.size() - 1;
+        }
+        HeapItem &old_item = g_data.heap[pos];
+        old_item.val = get_mononic_usec() + (uint64_t)ttl_ms * 1000;;
+        heap_update(g_data.heap.data(), pos, g_data.heap.size());
+    }
+}
 
 bool try_flush_buffer(Conn* conn) {
     ssize_t rv = 0;
@@ -126,37 +175,43 @@ int32_t parse_req(
 int32_t do_request(std::vector<std::string> &cmd, std::string &out) {
     if (cmd.size() == 1 && cmd_is(cmd[0], "keys")) {
         printf("keys requests\n");
-        do_keys(cmd, out);
+        do_keys(cmd, out, &g_data.db);
     } else if (cmd.size() == 2 && cmd_is(cmd[0], "get")) {
         printf("get request\n");
-        do_get(cmd, out);
+        do_get(cmd, out, &g_data.db);
     } else if (cmd.size() == 3 && cmd_is(cmd[0], "set")) {
         printf("set request\n");
-        do_set(cmd, out);
+        do_set(cmd, out, &g_data.db);
     } else if (cmd.size() == 2 && cmd_is(cmd[0], "del")) {
         printf("del request\n");
-        do_del(cmd, out);
+        do_del(cmd, out, &g_data.db);
     } else if (cmd.size() == 4 && cmd_is(cmd[0], "zadd")) {
         printf("zadd request\n");
-        do_zadd(cmd, out);
+        do_zadd(cmd, out, &g_data.db);
     } else if (cmd.size() == 3 && cmd_is(cmd[0], "zrem")) {
         printf("zrem request\n");
-        do_zrem(cmd, out);
+        do_zrem(cmd, out, &g_data.db);
     } else if (cmd.size() == 3 && cmd_is(cmd[0], "zscore")) {
         printf("zscore request\n");
-        do_zscore(cmd, out);
+        do_zscore(cmd, out, &g_data.db);
     } else if (cmd.size() == 6 && cmd_is(cmd[0], "zquery")) {
         printf("zquery request\n");
-        do_zquery(cmd, out);
+        do_zquery(cmd, out, &g_data.db);
     } else if (cmd.size() == 3 && cmd_is(cmd[0], "zrank")) {
         printf("zrank request\n");
-        do_zrank(cmd, out);
+        do_zrank(cmd, out, &g_data.db);
     } else if (cmd.size() == 3 && cmd_is(cmd[0], "zrrank")) {
         printf("zrrank request\n");
-        do_zrrank(cmd, out);
+        do_zrrank(cmd, out, &g_data.db);
     } else if (cmd.size() == 4 && cmd_is(cmd[0], "zrange")) {
         printf("zrange request\n");
-        do_zrange(cmd, out);
+        do_zrange(cmd, out, &g_data.db);
+    } else if (cmd.size() == 3 && cmd_is(cmd[0], "expire")) {
+        printf("expire request\n");
+        do_expire(cmd, out, &g_data.db, &entry_set_ttl);
+    } else if (cmd.size() == 2 && cmd_is(cmd[0], "ttl")) {
+        printf("ttl request\n");
+        do_ttl(cmd, out, &g_data.db, g_data.heap);
     } else {
         out_err(out, ERR_UNKNOWN, "Unknown cmd");
     }
@@ -225,6 +280,8 @@ bool try_fill_buffer(Conn* conn) {
     }
     do {
         size_t cap = sizeof(conn->rbuf) - conn->rbuf_size;
+        // add a pthread here and conditionally wait for 
+        // read syscall to return. If timeout, we return an error.
         rv = read(conn->fd, &conn->rbuf[conn->rbuf_size], cap);
     } while (rv < 0 && errno == EINTR);
     if (rv < 0 && errno == EAGAIN) {
@@ -265,28 +322,6 @@ void state_req(Conn* conn) {
 }
 
 
-static uint64_t get_mononic_usec() {
-    timespec tv = {0, 0};
-    clock_gettime(CLOCK_MONOTONIC, &tv);
-    return uint64_t(tv.tv_sec) * 1000000 + tv.tv_nsec / 1000;
-}
-
-static uint32_t next_timer_ms() {
-    if (dlist_empty(&g_data.idle_list)) {
-        return 10000; 
-    }
-    
-    uint64_t now_us = get_mononic_usec();
-    DList *next = g_data.idle_list.next;
-    Conn *next_conn = container_of(next, Conn, idle_list);
-    uint64_t next_start = next_conn->idle_start + k_idle_timeout_ms * 1000; 
-    if (next_start <= now_us) {
-        // missed
-        return 0;
-    }
-    return (uint32_t) ((next_start - now_us) / 1000);
-}
-
 void connection_io(Conn* conn) {
     // wake up by poll, update the idle timer
     // by moving conn in front of the idle list.
@@ -309,7 +344,7 @@ void connection_io(Conn* conn) {
 void conn_put(Conn* new_conn) {
     if ((size_t) new_conn->fd >= g_data.fd2conn.size()) {
         g_data.fd2conn.resize(new_conn->fd + 1);
-        printf("resized fd2conn\n");
+        printf("resized &g_data.fd2conn\n");
     }
     g_data.fd2conn[new_conn->fd] = new_conn;
 }
@@ -322,7 +357,7 @@ void conn_done(Conn* conn) {
     free(conn);
 }
 
-int accept_new_connection(std::vector<Conn *> &fd2conn, int fd) {
+int accept_new_connection(int fd) {
     // accept
     struct sockaddr_in client_addr = {};
     socklen_t socklen = sizeof(client_addr);
@@ -350,8 +385,23 @@ int accept_new_connection(std::vector<Conn *> &fd2conn, int fd) {
     return 0;
 }
 
+static void entry_del(Entry *ent) {
+    switch (ent->type) {
+        case T_ZSET:
+            dispose_zset(ent->zset);
+            delete ent->zset;
+            break;
+    }
+    entry_set_ttl(ent, -1);
+    delete ent;
+}
+
+static bool hnode_same(HNode *lhs, HNode *rhs) {
+    return lhs == rhs;
+}
+
 static void process_timers() {
-    uint64_t now_us = get_mononic_usec();
+    uint64_t now_us = get_mononic_usec() + 1000;
     while (!dlist_empty(&g_data.idle_list)) {
         Conn *next_conn = container_of(g_data.idle_list.next, Conn, idle_list);
         uint64_t next_start = next_conn->idle_start + k_idle_timeout_ms * 1000; 
@@ -361,6 +411,20 @@ static void process_timers() {
         
         printf("removing idle connection %d\n", next_conn->fd);
         conn_done(next_conn);
+    }
+
+    // TTL timers
+    const size_t k_max_works = 2000;
+    size_t nworks = 0;
+    while (!g_data.heap.empty() && g_data.heap[0].val < now_us) {
+        printf("removing expired key\n");
+        Entry *ent = container_of(g_data.heap[0].ref, Entry, heap_idx);
+        HNode *node = hm_pop(&g_data.db, &ent->node, &hnode_same);
+        assert (node == &ent->node);
+        entry_del(ent);
+        if (nworks++ >= k_max_works) {
+            break;
+        }
     }
 }
 
@@ -440,7 +504,7 @@ int main() {
 
         // try to accept new connection
         if (poll_args[0].revents) {
-            (void) accept_new_connection(g_data.fd2conn, fd);
+            (void) accept_new_connection(fd);
         }
     }
     return 0;
