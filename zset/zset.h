@@ -29,3 +29,4 @@ ZNode *zset_query(ZSet *zset, double score, const char *name, size_t len, int64_
 int32_t zrank(ZSet *zset, const char *name, size_t len);
 int32_t zrrank(ZSet *zset, const char* name, size_t len);
 int32_t zrange(ZSet *zset, double left, double right);
+void dispose_zset(ZSet *zset);

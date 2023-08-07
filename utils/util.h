@@ -18,3 +18,4 @@ size_t min(size_t lhs, size_t rhs);
 bool str2dbl(const std::string &s, double &out);
 bool str2ll(const std::string &s, int64_t &out);
 uint64_t str_hash(const uint8_t *data, size_t len);
+uint64_t get_mononic_usec();

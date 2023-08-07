@@ -16,8 +16,9 @@ add_subdirectory(serialization)
 add_subdirectory(avl_trees)
 add_subdirectory(zset)
 add_subdirectory(linked_list)
+add_subdirectory(heap)
 
-target_link_libraries(server PUBLIC Utils HashTable FileOps Ops Serialize LinkedList)
+target_link_libraries(server PUBLIC Utils HashTable FileOps Ops Serialize LinkedList Heap)
 target_link_libraries(client PUBLIC Utils FileOps Serialize)
 
 target_include_directories(server PUBLIC
